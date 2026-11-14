@@ -6554,63 +6554,6 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       children: [
-        Container(
-          margin: const EdgeInsets.only(bottom: 14),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFAF7E6),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFF1F4E3D), width: 1.2),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor: widget.account.iconBgColor,
-                    radius: 20,
-                    child: Icon(widget.account.icon, color: widget.account.iconColor, size: 22),
-                  ),
-                  const SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.account.name,
-                        style: const TextStyle(
-                          color: Color(0xFF1F4E3D),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'Tap any category/transfer to view details',
-                        style: TextStyle(color: Color(0xFF52796F), fontSize: 11, fontWeight: FontWeight.w500),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  const Text('Balance', style: TextStyle(color: Color(0xFF64748B), fontSize: 11)),
-                  Text(
-                    '₹${_formatCurrency(widget.account.balance)}',
-                    style: const TextStyle(
-                      color: Color(0xFF1F4E3D),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-
         // Month-wise Summary Sections (matching detail screen)
         ...groupedSummary.entries.map((entry) {
           final monthYearStr = entry.key;
