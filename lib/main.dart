@@ -6359,8 +6359,6 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
         .toList()
       ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
-    final summaryItems = _getSummaryItems(accountRecords);
-
     final Map<String, List<TransactionRecord>> groupedRecords = {};
     for (var rec in accountRecords) {
       final key = '${_monthName(rec.dateTime.month)} ${rec.dateTime.year}';
@@ -6369,6 +6367,11 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
       }
       groupedRecords[key]!.add(rec);
     }
+
+    final Map<String, List<_AccountSummaryItem>> groupedSummary = {};
+    groupedRecords.forEach((monthKey, recs) {
+      groupedSummary[monthKey] = _getSummaryItems(recs);
+    });
 
     return Scaffold(
       backgroundColor: const Color(0xFFFAF7E6),
@@ -6391,7 +6394,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
               ),
             ),
             Text(
-              _showSummary ? 'Summary: ${summaryItems.length} Categories/Transfers' : 'Records: All time',
+              _showSummary ? 'Summary: Month-wise' : 'Records: All time',
               style: const TextStyle(
                 color: Colors.grey,
                 fontSize: 12,
@@ -6506,7 +6509,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
 
                 Expanded(
                   child: _showSummary
-                      ? _buildSummaryView(summaryItems)
+                      ? _buildSummaryView(groupedSummary)
                       : ListView(
                           physics: const BouncingScrollPhysics(),
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -6546,7 +6549,7 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
     );
   }
 
-  Widget _buildSummaryView(List<_AccountSummaryItem> items) {
+  Widget _buildSummaryView(Map<String, List<_AccountSummaryItem>> groupedSummary) {
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -6607,7 +6610,50 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
             ],
           ),
         ),
-        ...items.map((item) => _buildSummaryItemCard(item)),
+
+        // Month-wise Summary Sections (matching detail screen)
+        ...groupedSummary.entries.map((entry) {
+          final monthYearStr = entry.key;
+          final monthItems = entry.value;
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 14.0, bottom: 8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          monthYearStr,
+                          style: const TextStyle(
+                            color: Color(0xFF1F4E3D),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        Text(
+                          '${monthItems.length} categories/transfers',
+                          style: const TextStyle(
+                            color: Color(0xFF52796F),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Container(height: 1.5, color: const Color(0xFF1F4E3D)),
+                  ],
+                ),
+              ),
+              ...monthItems.map((item) => _buildSummaryItemCard(item)),
+            ],
+          );
+        }).toList(),
       ],
     );
   }
