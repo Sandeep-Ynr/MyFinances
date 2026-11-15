@@ -570,6 +570,10 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
         _records = decodedList.map((item) => TransactionRecord.fromJson(item)).toList();
       }
 
+      if (_accounts.isNotEmpty && _records.isNotEmpty) {
+        _syncAccountBalances();
+      }
+
       if (categoriesJsonStr != null && categoriesJsonStr.isNotEmpty) {
         final List<dynamic> decodedList = jsonDecode(categoriesJsonStr);
         _categories = decodedList.map((item) => CategoryItem.fromJson(item)).toList();
@@ -592,6 +596,7 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
 
   Future<void> _saveDataToLocalStorage() async {
     try {
+      _syncAccountBalances();
       final prefs = await SharedPreferences.getInstance();
       final accountsJsonStr = jsonEncode(_accounts.map((a) => a.toJson()).toList());
       final recordsJsonStr = jsonEncode(_records.map((r) => r.toJson()).toList());
@@ -607,6 +612,66 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
       await prefs.setInt('daily_reminder_minute', _reminderMinute);
     } catch (e) {
       debugPrint('Error saving local storage: $e');
+    }
+  }
+
+  String? _getTransferToAccount(TransactionRecord rec) {
+    if (rec.type != 'TRANSFER') return null;
+    if (rec.category.startsWith('Transfer to ')) {
+      final toAcc = rec.category.substring('Transfer to '.length).trim();
+      if (toAcc.isNotEmpty) return toAcc;
+    }
+    if (rec.category.contains(' > ')) {
+      final parts = rec.category.replaceAll('[', '').replaceAll(']', '').split(' > ');
+      if (parts.length > 1 && parts[1].trim().isNotEmpty) {
+        return parts[1].trim();
+      }
+    }
+    if (rec.notes.contains(' to ')) {
+      final clean = rec.notes.split('•').first.trim();
+      final parts = clean.split(' to ');
+      if (parts.length > 1 && parts[1].trim().isNotEmpty) {
+        return parts[1].trim();
+      }
+    }
+    return null;
+  }
+
+  bool _isTransferToAccount(TransactionRecord rec, String accountName) {
+    final toAcc = _getTransferToAccount(rec);
+    if (toAcc == null) return false;
+    return toAcc.trim().toLowerCase() == accountName.trim().toLowerCase();
+  }
+
+  void _syncAccountBalances() {
+    for (var acc in _accounts) {
+      final openingRecs = _records.where(
+        (r) => r.accountName == acc.name && r.category == 'Opening Balance',
+      ).toList();
+
+      if (openingRecs.isNotEmpty) {
+        double openingBal = 0.0;
+        for (var op in openingRecs) {
+          if (op.type == 'EXPENSE') {
+            openingBal -= op.amount;
+          } else {
+            openingBal += op.amount;
+          }
+        }
+
+        double calculated = openingBal;
+        for (var r in _records) {
+          if (r.category == 'Opening Balance') continue;
+          if (r.accountName == acc.name) {
+            if (r.type == 'INCOME') calculated += r.amount;
+            else if (r.type == 'EXPENSE') calculated -= r.amount;
+            else if (r.type == 'TRANSFER') calculated -= r.amount;
+          } else if (r.type == 'TRANSFER' && _isTransferToAccount(r, acc.name)) {
+            calculated += r.amount;
+          }
+        }
+        acc.balance = calculated;
+      }
     }
   }
 
@@ -1254,25 +1319,36 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
   void _updateTransactionAccountCategory(TransactionRecord record, String newAccountName, String newCategory) {
     setState(() {
       if (newAccountName != record.accountName) {
-        final oldAccIdx = _accounts.indexWhere((a) => a.name == record.accountName);
-        if (oldAccIdx != -1) {
-          if (record.type == 'EXPENSE') {
-            _accounts[oldAccIdx].balance += record.amount;
-          } else if (record.type == 'INCOME') {
-            _accounts[oldAccIdx].balance -= record.amount;
+        if (record.type == 'TRANSFER') {
+          final oldFromIdx = _accounts.indexWhere((a) => a.name == record.accountName);
+          if (oldFromIdx != -1) _accounts[oldFromIdx].balance += record.amount;
+          final newFromIdx = _accounts.indexWhere((a) => a.name == newAccountName);
+          if (newFromIdx != -1) _accounts[newFromIdx].balance -= record.amount;
+          record.accountName = newAccountName;
+          final toName = _getTransferToAccount(record) ?? '';
+          record.notes = 'Transfer from $newAccountName to $toName';
+        } else {
+          final oldAccIdx = _accounts.indexWhere((a) => a.name == record.accountName);
+          if (oldAccIdx != -1) {
+            if (record.type == 'EXPENSE') {
+              _accounts[oldAccIdx].balance += record.amount;
+            } else if (record.type == 'INCOME') {
+              _accounts[oldAccIdx].balance -= record.amount;
+            }
           }
-        }
-        final newAccIdx = _accounts.indexWhere((a) => a.name == newAccountName);
-        if (newAccIdx != -1) {
-          if (record.type == 'EXPENSE') {
-            _accounts[newAccIdx].balance -= record.amount;
-          } else if (record.type == 'INCOME') {
-            _accounts[newAccIdx].balance += record.amount;
+          final newAccIdx = _accounts.indexWhere((a) => a.name == newAccountName);
+          if (newAccIdx != -1) {
+            if (record.type == 'EXPENSE') {
+              _accounts[newAccIdx].balance -= record.amount;
+            } else if (record.type == 'INCOME') {
+              _accounts[newAccIdx].balance += record.amount;
+            }
           }
+          record.accountName = newAccountName;
         }
-        record.accountName = newAccountName;
       }
       record.category = newCategory;
+      _syncAccountBalances();
     });
     _saveDataToLocalStorage();
   }
@@ -1292,7 +1368,9 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
           onUpdateRecord: _updateTransactionAccountCategory,
         ),
       ),
-    );
+    ).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _showMonthBreakdownDialog(String monthName, int monthIndex, {String filterType = 'ALL'}) {
@@ -1313,7 +1391,9 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
           onUpdateRecord: _updateTransactionAccountCategory,
         ),
       ),
-    );
+    ).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _showCategoryBreakdownDialog(String categoryName, String type) {
@@ -1334,7 +1414,9 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
           onUpdateRecord: _updateTransactionAccountCategory,
         ),
       ),
-    );
+    ).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _duplicateTransaction(TransactionRecord rec) {
@@ -1347,7 +1429,7 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
       dateTime: DateTime.now(),
       notes: rec.notes,
     );
-    _addTransaction(dup);
+    _addTransaction(dup, toAccountName: _getTransferToAccount(rec));
   }
 
   // ==========================================================================
@@ -1357,12 +1439,13 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
     setState(() {
       _records.add(record);
 
-      if (record.type == 'TRANSFER' && toAccountName != null) {
+      final destAccount = toAccountName ?? _getTransferToAccount(record);
+      if (record.type == 'TRANSFER' && destAccount != null) {
         final fromIdx = _accounts.indexWhere((a) => a.name == record.accountName);
         if (fromIdx != -1) {
           _accounts[fromIdx].balance -= record.amount;
         }
-        final toIdx = _accounts.indexWhere((a) => a.name == toAccountName);
+        final toIdx = _accounts.indexWhere((a) => a.name == destAccount);
         if (toIdx != -1) {
           _accounts[toIdx].balance += record.amount;
         }
@@ -1376,6 +1459,7 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
           }
         }
       }
+      _syncAccountBalances();
     });
 
     _saveDataToLocalStorage();
@@ -1390,16 +1474,31 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
 
   void _deleteTransaction(TransactionRecord record) {
     setState(() {
-      final index = _accounts.indexWhere((a) => a.name == record.accountName);
-      if (index != -1) {
-        if (record.type == 'EXPENSE') {
-          _accounts[index].balance += record.amount;
-        } else if (record.type == 'INCOME') {
-          _accounts[index].balance -= record.amount;
+      if (record.type == 'TRANSFER') {
+        final fromIdx = _accounts.indexWhere((a) => a.name == record.accountName);
+        if (fromIdx != -1) {
+          _accounts[fromIdx].balance += record.amount;
+        }
+        final toName = _getTransferToAccount(record);
+        if (toName != null) {
+          final toIdx = _accounts.indexWhere((a) => a.name == toName);
+          if (toIdx != -1) {
+            _accounts[toIdx].balance -= record.amount;
+          }
+        }
+      } else {
+        final index = _accounts.indexWhere((a) => a.name == record.accountName);
+        if (index != -1) {
+          if (record.type == 'EXPENSE') {
+            _accounts[index].balance += record.amount;
+          } else if (record.type == 'INCOME') {
+            _accounts[index].balance -= record.amount;
+          }
         }
       }
 
       _records.removeWhere((r) => r.id == record.id);
+      _syncAccountBalances();
     });
 
     _saveDataToLocalStorage();
@@ -1409,20 +1508,39 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
     );
   }
 
-  void _showEditTransactionDialog(TransactionRecord record) {
+  Future<void> _showEditTransactionDialog(TransactionRecord record) async {
     final amountController = TextEditingController(text: record.amount.toStringAsFixed(0));
-    final notesController = TextEditingController(text: record.notes);
+    
+    // Clean raw notes for editing
+    String initialNotes = record.notes;
+    if (record.type == 'TRANSFER') {
+      if (initialNotes.contains('•')) {
+        final parts = initialNotes.split('•');
+        initialNotes = parts.sublist(1).join('•').trim();
+      } else if (initialNotes.startsWith('Transfer from ')) {
+        initialNotes = '';
+      }
+    }
+    final notesController = TextEditingController(text: initialNotes);
     String editType = record.type;
     String editAccount = _accounts.any((a) => a.name == record.accountName)
         ? record.accountName
         : (_accounts.isNotEmpty ? _accounts.first.name : record.accountName);
+
+    String? initialToAcc = _getTransferToAccount(record);
+    String editToAccount = (initialToAcc != null && _accounts.any((a) => a.name == initialToAcc))
+        ? initialToAcc
+        : (_accounts.where((a) => a.name != editAccount).isNotEmpty
+            ? _accounts.where((a) => a.name != editAccount).first.name
+            : (_accounts.isNotEmpty ? _accounts.first.name : ''));
+
     String editCategory = _categories.any((c) => c.name == record.category)
         ? record.category
         : (_categories.where((c) => c.type == editType).isNotEmpty
             ? _categories.where((c) => c.type == editType).first.name
             : (_categories.isNotEmpty ? _categories.first.name : record.category));
 
-    showDialog(
+    await showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
@@ -1452,7 +1570,7 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
                       ChoiceChip(
-                        label: const Text('EXPENSE'),
+                        label: const Text('EXPENSE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                         selected: editType == 'EXPENSE',
                         selectedColor: const Color(0xFFFEE2E2),
                         onSelected: (val) {
@@ -1464,7 +1582,7 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
                         },
                       ),
                       ChoiceChip(
-                        label: const Text('INCOME'),
+                        label: const Text('INCOME', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                         selected: editType == 'INCOME',
                         selectedColor: const Color(0xFFDCFCE7),
                         onSelected: (val) {
@@ -1475,70 +1593,143 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
                           });
                         },
                       ),
+                      ChoiceChip(
+                        label: const Text('TRANSFER', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                        selected: editType == 'TRANSFER',
+                        selectedColor: const Color(0xFFDBEAFE),
+                        onSelected: (val) {
+                          setDialogState(() {
+                            editType = 'TRANSFER';
+                          });
+                        },
+                      ),
                     ],
                   ),
                   const SizedBox(height: 14),
-                  if (_accounts.isNotEmpty) ...[
-                    DropdownButtonFormField<String>(
-                      value: _accounts.any((a) => a.name == editAccount) ? editAccount : _accounts.first.name,
-                      decoration: const InputDecoration(
-                        labelText: 'Account',
-                        focusedBorder: UnderlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF1F4E3D)),
-                        ),
-                      ),
-                      items: _accounts.map((acc) {
-                        return DropdownMenuItem<String>(
-                          value: acc.name,
-                          child: Row(
-                            children: [
-                              Icon(acc.icon, color: acc.iconColor, size: 18),
-                              const SizedBox(width: 8),
-                              Text(acc.name, style: const TextStyle(color: Color(0xFF1F4E3D), fontWeight: FontWeight.w600)),
-                            ],
+                  if (editType == 'TRANSFER') ...[
+                    if (_accounts.isNotEmpty) ...[
+                      DropdownButtonFormField<String>(
+                        value: _accounts.any((a) => a.name == editAccount) ? editAccount : _accounts.first.name,
+                        decoration: const InputDecoration(
+                          labelText: 'From Account (Source)',
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFF1F4E3D)),
                           ),
-                        );
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          setDialogState(() => editAccount = val);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  if (categoryOptions.isNotEmpty) ...[
-                    DropdownButtonFormField<String>(
-                      value: categoryOptions.any((c) => c.name == editCategory) ? editCategory : categoryOptions.first.name,
-                      decoration: const InputDecoration(
-                        labelText: 'Category',
-                        focusedBorder: UnderlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF1F4E3D)),
                         ),
+                        items: _accounts.map((acc) {
+                          return DropdownMenuItem<String>(
+                            value: acc.name,
+                            child: Row(
+                              children: [
+                                Icon(acc.icon, color: acc.iconColor, size: 18),
+                                const SizedBox(width: 8),
+                                Text(acc.name, style: const TextStyle(color: Color(0xFF1F4E3D), fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDialogState(() => editAccount = val);
+                          }
+                        },
                       ),
-                      items: categoryOptions.map((cat) {
-                        return DropdownMenuItem<String>(
-                          value: cat.name,
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 9,
-                                backgroundColor: cat.bgColor,
-                                child: Icon(cat.icon, size: 11, color: Colors.white),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(cat.name, style: const TextStyle(color: Color(0xFF1F4E3D), fontWeight: FontWeight.w600)),
-                            ],
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        value: _accounts.any((a) => a.name == editToAccount)
+                            ? editToAccount
+                            : (_accounts.where((a) => a.name != editAccount).isNotEmpty
+                                ? _accounts.where((a) => a.name != editAccount).first.name
+                                : _accounts.first.name),
+                        decoration: const InputDecoration(
+                          labelText: 'To Account (Destination)',
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFF1F4E3D)),
                           ),
-                        );
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          setDialogState(() => editCategory = val);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 12),
+                        ),
+                        items: _accounts.map((acc) {
+                          return DropdownMenuItem<String>(
+                            value: acc.name,
+                            child: Row(
+                              children: [
+                                Icon(acc.icon, color: acc.iconColor, size: 18),
+                                const SizedBox(width: 8),
+                                Text(acc.name, style: const TextStyle(color: Color(0xFF1F4E3D), fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDialogState(() => editToAccount = val);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                  ] else ...[
+                    if (_accounts.isNotEmpty) ...[
+                      DropdownButtonFormField<String>(
+                        value: _accounts.any((a) => a.name == editAccount) ? editAccount : _accounts.first.name,
+                        decoration: const InputDecoration(
+                          labelText: 'Account',
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFF1F4E3D)),
+                          ),
+                        ),
+                        items: _accounts.map((acc) {
+                          return DropdownMenuItem<String>(
+                            value: acc.name,
+                            child: Row(
+                              children: [
+                                Icon(acc.icon, color: acc.iconColor, size: 18),
+                                const SizedBox(width: 8),
+                                Text(acc.name, style: const TextStyle(color: Color(0xFF1F4E3D), fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDialogState(() => editAccount = val);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (categoryOptions.isNotEmpty) ...[
+                      DropdownButtonFormField<String>(
+                        value: categoryOptions.any((c) => c.name == editCategory) ? editCategory : categoryOptions.first.name,
+                        decoration: const InputDecoration(
+                          labelText: 'Category',
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFF1F4E3D)),
+                          ),
+                        ),
+                        items: categoryOptions.map((cat) {
+                          return DropdownMenuItem<String>(
+                            value: cat.name,
+                            child: Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 9,
+                                  backgroundColor: cat.bgColor,
+                                  child: Icon(cat.icon, size: 11, color: Colors.white),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(cat.name, style: const TextStyle(color: Color(0xFF1F4E3D), fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDialogState(() => editCategory = val);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                   ],
                   TextField(
                     controller: amountController,
@@ -1575,35 +1766,75 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
                 ),
                 onPressed: () {
                   final newAmount = double.tryParse(amountController.text) ?? record.amount;
+                  if (newAmount <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Please enter an amount greater than 0')),
+                    );
+                    return;
+                  }
+
+                  if (editType == 'TRANSFER' && editAccount == editToAccount) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Source and Destination accounts cannot be the same!')),
+                    );
+                    return;
+                  }
+
                   setState(() {
-                    final oldAccIndex = _accounts.indexWhere((a) => a.name == record.accountName);
-                    if (oldAccIndex != -1) {
-                      if (record.type == 'EXPENSE') {
-                        _accounts[oldAccIndex].balance += record.amount;
-                      } else if (record.type == 'INCOME') {
-                        _accounts[oldAccIndex].balance -= record.amount;
+                    // 1. Revert old transaction amount from old account balances
+                    if (record.type == 'EXPENSE') {
+                      final oldIdx = _accounts.indexWhere((a) => a.name == record.accountName);
+                      if (oldIdx != -1) _accounts[oldIdx].balance += record.amount;
+                    } else if (record.type == 'INCOME') {
+                      final oldIdx = _accounts.indexWhere((a) => a.name == record.accountName);
+                      if (oldIdx != -1) _accounts[oldIdx].balance -= record.amount;
+                    } else if (record.type == 'TRANSFER') {
+                      final oldFromIdx = _accounts.indexWhere((a) => a.name == record.accountName);
+                      if (oldFromIdx != -1) _accounts[oldFromIdx].balance += record.amount;
+                      final oldToName = _getTransferToAccount(record);
+                      if (oldToName != null) {
+                        final oldToIdx = _accounts.indexWhere((a) => a.name == oldToName);
+                        if (oldToIdx != -1) _accounts[oldToIdx].balance -= record.amount;
                       }
                     }
 
-                    final newAccIndex = _accounts.indexWhere((a) => a.name == editAccount);
-                    if (newAccIndex != -1) {
-                      if (editType == 'EXPENSE') {
-                        _accounts[newAccIndex].balance -= newAmount;
-                      } else if (editType == 'INCOME') {
-                        _accounts[newAccIndex].balance += newAmount;
-                      }
+                    // 2. Apply new transaction amount to new account balances
+                    if (editType == 'EXPENSE') {
+                      final newIdx = _accounts.indexWhere((a) => a.name == editAccount);
+                      if (newIdx != -1) _accounts[newIdx].balance -= newAmount;
+                    } else if (editType == 'INCOME') {
+                      final newIdx = _accounts.indexWhere((a) => a.name == editAccount);
+                      if (newIdx != -1) _accounts[newIdx].balance += newAmount;
+                    } else if (editType == 'TRANSFER') {
+                      final newFromIdx = _accounts.indexWhere((a) => a.name == editAccount);
+                      if (newFromIdx != -1) _accounts[newFromIdx].balance -= newAmount;
+                      final newToIdx = _accounts.indexWhere((a) => a.name == editToAccount);
+                      if (newToIdx != -1) _accounts[newToIdx].balance += newAmount;
                     }
 
-                    record.accountName = editAccount;
-                    record.category = editCategory;
-                    record.amount = newAmount;
+                    // 3. Update the record details
                     record.type = editType;
-                    record.notes = notesController.text;
+                    record.accountName = editAccount;
+                    record.amount = newAmount;
+
+                    final userNote = notesController.text.trim();
+                    if (editType == 'TRANSFER') {
+                      record.category = 'Transfer to $editToAccount';
+                      record.notes = userNote.isNotEmpty
+                          ? 'Transfer from $editAccount to $editToAccount • $userNote'
+                          : 'Transfer from $editAccount to $editToAccount';
+                    } else {
+                      record.category = editCategory;
+                      record.notes = userNote;
+                    }
+
+                    _syncAccountBalances();
                   });
+
                   _saveDataToLocalStorage();
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Transaction updated & saved to local memory!')),
+                    const SnackBar(content: Text('Transaction updated & balance reflected!')),
                   );
                 },
                 child: const Text('SAVE CHANGES', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -6673,9 +6904,9 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                     if (widget.onDeleteRecord != null) widget.onDeleteRecord!(rec);
                     setState(() {});
                   },
-                  onEditRecord: (rec) {
-                    if (widget.onEditRecord != null) widget.onEditRecord!(rec);
-                    setState(() {});
+                  onEditRecord: (rec) async {
+                    if (widget.onEditRecord != null) await widget.onEditRecord!(rec);
+                    if (mounted) setState(() {});
                   },
                   onDuplicateRecord: (rec) {
                     if (widget.onDuplicateRecord != null) widget.onDuplicateRecord!(rec);
@@ -7033,11 +7264,11 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
                                   ),
                                   IconButton(
                                     icon: const Icon(Icons.edit_rounded, color: Colors.white, size: 22),
-                                    onPressed: () {
+                                    onPressed: () async {
                                       Navigator.pop(ctx);
                                       if (widget.onEditRecord != null) {
-                                        widget.onEditRecord!(rec);
-                                        setState(() {});
+                                        await widget.onEditRecord!(rec);
+                                        if (mounted) setState(() {});
                                       }
                                     },
                                   ),
@@ -7507,11 +7738,11 @@ class _AccountGroupDetailsScreenState extends State<AccountGroupDetailsScreen> {
                                   ),
                                   IconButton(
                                     icon: const Icon(Icons.edit_rounded, color: Colors.white, size: 22),
-                                    onPressed: () {
+                                    onPressed: () async {
                                       Navigator.pop(ctx);
                                       if (widget.onEditRecord != null) {
-                                        widget.onEditRecord!(rec);
-                                        setState(() {});
+                                        await widget.onEditRecord!(rec);
+                                        if (mounted) setState(() {});
                                       }
                                     },
                                   ),
@@ -8090,11 +8321,11 @@ class _CategoryDetailsScreenState extends State<CategoryDetailsScreen> {
                                   ),
                                   IconButton(
                                     icon: const Icon(Icons.edit_rounded, color: Colors.white, size: 22),
-                                    onPressed: () {
+                                    onPressed: () async {
                                       Navigator.pop(ctx);
                                       if (widget.onEditRecord != null) {
-                                        widget.onEditRecord!(rec);
-                                        setState(() {});
+                                        await widget.onEditRecord!(rec);
+                                        if (mounted) setState(() {});
                                       }
                                     },
                                   ),
