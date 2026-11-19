@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'features/statement_analyzer/screens/my_finance_dashboard_screen.dart';
+import 'features/statement_analyzer/screens/import_statement_screen.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -2713,6 +2715,20 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
         centerTitle: false,
         actions: [
           IconButton(
+            icon: const Icon(Icons.picture_as_pdf_outlined, color: Color(0xFF1F4E3D), size: 24),
+            tooltip: 'Google Pay Statement Analyzer',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => MyFinanceDashboardScreen(
+                    existingAccountNames: _accounts.map((a) => a.name).toList(),
+                  ),
+                ),
+              );
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.search, color: Color(0xFF1F4E3D), size: 26),
             onPressed: () {},
           ),
@@ -2835,6 +2851,46 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
             onTap: () {
               Navigator.pop(context);
               setState(() => _currentTabIndex = 1);
+            },
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFF1F4E3D)),
+            title: const Text('Google Pay Statement Analyzer', style: TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: const Text('Analyze PDF statement & Finance Dashboard', style: TextStyle(fontSize: 11.5, color: Color(0xFF52796F))),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFDCFCE7),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text('NEW', style: TextStyle(color: Color(0xFF16A34A), fontSize: 10, fontWeight: FontWeight.bold)),
+            ),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => MyFinanceDashboardScreen(
+                    existingAccountNames: _accounts.map((a) => a.name).toList(),
+                  ),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.file_upload_outlined, color: Color(0xFF1F4E3D)),
+            title: const Text('Import Statement PDF', style: TextStyle(fontWeight: FontWeight.w600)),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ImportStatementScreen(
+                    existingAccountNames: _accounts.map((a) => a.name).toList(),
+                  ),
+                ),
+              );
             },
           ),
           const Divider(),
