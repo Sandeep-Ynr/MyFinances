@@ -430,6 +430,34 @@ class AccountMonthSummary {
   });
 }
 
+String? getTransferToAccountGlobal(TransactionRecord rec) {
+  if (rec.type != 'TRANSFER') return null;
+  if (rec.category.startsWith('Transfer to ')) {
+    final toAcc = rec.category.substring('Transfer to '.length).trim();
+    if (toAcc.isNotEmpty) return toAcc;
+  }
+  if (rec.category.contains(' > ')) {
+    final parts = rec.category.replaceAll('[', '').replaceAll(']', '').split(' > ');
+    if (parts.length > 1 && parts[1].trim().isNotEmpty) {
+      return parts[1].trim();
+    }
+  }
+  if (rec.notes.contains(' to ')) {
+    final clean = rec.notes.split('•').first.trim();
+    final parts = clean.split(' to ');
+    if (parts.length > 1 && parts[1].trim().isNotEmpty) {
+      return parts[1].trim();
+    }
+  }
+  return null;
+}
+
+bool isTransferToAccountGlobal(TransactionRecord rec, String accountName) {
+  final toAcc = getTransferToAccountGlobal(rec);
+  if (toAcc == null) return false;
+  return toAcc.trim().toLowerCase() == accountName.trim().toLowerCase();
+}
+
 class MyMoneyMainScreen extends StatefulWidget {
   final bool isDarkMode;
   final Function(bool) onToggleTheme;
@@ -617,42 +645,19 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
     }
   }
 
-  String? _getTransferToAccount(TransactionRecord rec) {
-    if (rec.type != 'TRANSFER') return null;
-    if (rec.category.startsWith('Transfer to ')) {
-      final toAcc = rec.category.substring('Transfer to '.length).trim();
-      if (toAcc.isNotEmpty) return toAcc;
-    }
-    if (rec.category.contains(' > ')) {
-      final parts = rec.category.replaceAll('[', '').replaceAll(']', '').split(' > ');
-      if (parts.length > 1 && parts[1].trim().isNotEmpty) {
-        return parts[1].trim();
-      }
-    }
-    if (rec.notes.contains(' to ')) {
-      final clean = rec.notes.split('•').first.trim();
-      final parts = clean.split(' to ');
-      if (parts.length > 1 && parts[1].trim().isNotEmpty) {
-        return parts[1].trim();
-      }
-    }
-    return null;
-  }
+  String? _getTransferToAccount(TransactionRecord rec) => getTransferToAccountGlobal(rec);
 
-  bool _isTransferToAccount(TransactionRecord rec, String accountName) {
-    final toAcc = _getTransferToAccount(rec);
-    if (toAcc == null) return false;
-    return toAcc.trim().toLowerCase() == accountName.trim().toLowerCase();
-  }
+  bool _isTransferToAccount(TransactionRecord rec, String accountName) => isTransferToAccountGlobal(rec, accountName);
 
   void _syncAccountBalances() {
     for (var acc in _accounts) {
+      final accNameLower = acc.name.trim().toLowerCase();
       final openingRecs = _records.where(
-        (r) => r.accountName == acc.name && r.category == 'Opening Balance',
+        (r) => r.accountName.trim().toLowerCase() == accNameLower && r.category == 'Opening Balance',
       ).toList();
 
+      double openingBal = 0.0;
       if (openingRecs.isNotEmpty) {
-        double openingBal = 0.0;
         for (var op in openingRecs) {
           if (op.type == 'EXPENSE') {
             openingBal -= op.amount;
@@ -660,20 +665,21 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
             openingBal += op.amount;
           }
         }
-
-        double calculated = openingBal;
-        for (var r in _records) {
-          if (r.category == 'Opening Balance') continue;
-          if (r.accountName == acc.name) {
-            if (r.type == 'INCOME') calculated += r.amount;
-            else if (r.type == 'EXPENSE') calculated -= r.amount;
-            else if (r.type == 'TRANSFER') calculated -= r.amount;
-          } else if (r.type == 'TRANSFER' && _isTransferToAccount(r, acc.name)) {
-            calculated += r.amount;
-          }
-        }
-        acc.balance = calculated;
       }
+
+      double calculated = openingBal;
+      for (var r in _records) {
+        if (r.category == 'Opening Balance') continue;
+        final rAccLower = r.accountName.trim().toLowerCase();
+        if (rAccLower == accNameLower) {
+          if (r.type == 'INCOME') calculated += r.amount;
+          else if (r.type == 'EXPENSE') calculated -= r.amount;
+          else if (r.type == 'TRANSFER') calculated -= r.amount;
+        } else if (r.type == 'TRANSFER' && isTransferToAccountGlobal(r, acc.name)) {
+          calculated += r.amount;
+        }
+      }
+      acc.balance = calculated;
     }
   }
 
@@ -2143,7 +2149,9 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
     final existingOpeningRec = existingOpeningIndex != -1 ? _records[existingOpeningIndex] : null;
 
     final nameController = TextEditingController(text: account.name);
-    final initialBalVal = existingOpeningRec != null ? existingOpeningRec.amount : account.balance;
+    final initialBalVal = existingOpeningRec != null
+        ? (existingOpeningRec.type == 'EXPENSE' ? -existingOpeningRec.amount : existingOpeningRec.amount)
+        : 0.0;
     final balanceController = TextEditingController(text: initialBalVal.toStringAsFixed(2));
     final priorityController = TextEditingController(text: account.priority.toString());
     DateTime selectedOpeningDate = existingOpeningRec != null ? existingOpeningRec.dateTime : DateTime.now();
@@ -2367,34 +2375,32 @@ class _MyMoneyMainScreenState extends State<MyMoneyMainScreen> {
                       }
                     }
 
-                    if (existingOpeningRec != null) {
-                      existingOpeningRec.accountName = newName;
-                      existingOpeningRec.amount = newOpeningBal.abs();
-                      existingOpeningRec.type = newOpeningBal >= 0 ? 'INCOME' : 'EXPENSE';
-                      existingOpeningRec.dateTime = selectedOpeningDate;
-                    } else if (newOpeningBal != 0) {
-                      _records.add(
-                        TransactionRecord(
-                          id: 'init_${account.id}',
-                          type: newOpeningBal >= 0 ? 'INCOME' : 'EXPENSE',
-                          accountName: newName,
-                          category: 'Opening Balance',
-                          amount: newOpeningBal.abs(),
-                          notes: 'Initial Account Balance',
-                          dateTime: selectedOpeningDate,
-                        ),
-                      );
-                    }
-
-                    double totalInc = 0.0;
-                    double totalExp = 0.0;
-                    for (var r in _records) {
-                      if (r.accountName == newName) {
-                        if (r.type == 'INCOME') totalInc += r.amount;
-                        if (r.type == 'EXPENSE') totalExp += r.amount;
+                    if (newOpeningBal == 0) {
+                      if (existingOpeningRec != null) {
+                        _records.remove(existingOpeningRec);
+                      }
+                    } else {
+                      if (existingOpeningRec != null) {
+                        existingOpeningRec.accountName = newName;
+                        existingOpeningRec.amount = newOpeningBal.abs();
+                        existingOpeningRec.type = newOpeningBal >= 0 ? 'INCOME' : 'EXPENSE';
+                        existingOpeningRec.dateTime = selectedOpeningDate;
+                      } else {
+                        _records.add(
+                          TransactionRecord(
+                            id: 'init_${account.id}',
+                            type: newOpeningBal >= 0 ? 'INCOME' : 'EXPENSE',
+                            accountName: newName,
+                            category: 'Opening Balance',
+                            amount: newOpeningBal.abs(),
+                            notes: 'Initial Account Balance',
+                            dateTime: selectedOpeningDate,
+                          ),
+                        );
                       }
                     }
-                    account.balance = totalInc - totalExp;
+
+                    _syncAccountBalances();
                   });
                   _saveDataToLocalStorage();
                   Navigator.pop(context);
@@ -6615,35 +6621,15 @@ class _AccountDetailsScreenState extends State<AccountDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    bool hasOpening = widget.allRecords.any((r) => r.accountName == widget.account.name && r.category == 'Opening Balance');
-    if (!hasOpening && widget.account.balance != 0) {
-      double netOther = 0.0;
-      DateTime earliestDate = DateTime.now();
-      for (var r in widget.allRecords) {
-        if (r.accountName == widget.account.name && r.category != 'Opening Balance') {
-          if (r.type == 'INCOME') netOther += r.amount;
-          if (r.type == 'EXPENSE') netOther -= r.amount;
-          if (r.dateTime.isBefore(earliestDate)) earliestDate = r.dateTime;
-        }
+    final accNameLower = widget.account.name.trim().toLowerCase();
+    final accountRecords = widget.allRecords.where((r) {
+      if (r.accountName.trim().toLowerCase() == accNameLower) return true;
+      if (r.type == 'TRANSFER') {
+        if (isTransferToAccountGlobal(r, widget.account.name)) return true;
       }
-      double calcOpening = widget.account.balance - netOther;
-      if (calcOpening != 0) {
-        final newOpening = TransactionRecord(
-          id: 'init_${widget.account.id}',
-          type: calcOpening > 0 ? 'INCOME' : 'EXPENSE',
-          accountName: widget.account.name,
-          category: 'Opening Balance',
-          amount: calcOpening.abs(),
-          notes: 'Initial Account Balance',
-          dateTime: earliestDate,
-        );
-        widget.allRecords.add(newOpening);
-      }
-    }
-
-    final accountRecords = widget.allRecords
-        .where((r) => r.accountName == widget.account.name || r.notes.contains(widget.account.name))
-        .toList()
+      if (r.notes.toLowerCase().contains(accNameLower)) return true;
+      return false;
+    }).toList()
       ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
     final Map<String, List<TransactionRecord>> groupedRecords = {};
